@@ -22,7 +22,7 @@ jobs:
         run: pip install shinylive
 
       - name: Make shinylive deployment in docs/
-        run: shinylive export myapp docs
+        run: shinylive export src_shiny_app docs
 
       - name: Upload website artifact
         if: github.ref == 'refs/heads/main'
