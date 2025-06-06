@@ -44,5 +44,6 @@ def plot():
     msft_image[Q_X**2 + Q_Y**2 > k_0**2] = np.nan
     msft_image *= k_0/z_det
     msft_image = PolMap * np.abs(msft_image**2)
-    fig = px.imshow(np.log10(msft_image))
+    msft_image[np.isnan(msft_image)] = np.nanmin(msft_image)
+    fig = px.imshow(msft_image)
     return fig  
