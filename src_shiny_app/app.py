@@ -1,12 +1,13 @@
-import matplotlib.pyplot as plt
 import numpy as np
 from shiny.express import input, render, ui
+import plotly.express as px
+from shinywidgets import render_widget  
 
 ui.input_slider("radius", "Radius [nm]", 1, 100, 20)
 ui.input_slider("wavelength", "Wavelength [nm]", 1, 10, 1)
 
-@render.plot(alt="A histogram")  
-def plot():
+@render_widget  
+def plot():  
 
     radius = input.radius()
     wavelength = input.wavelength()
@@ -43,8 +44,5 @@ def plot():
     msft_image[Q_X**2 + Q_Y**2 > k_0**2] = np.nan
     msft_image *= k_0/z_det
     msft_image = PolMap * np.abs(msft_image**2)
-
-    fig, ax = plt.subplots()
-    max_val = np.nanmax(np.log10(msft_image))
-    ax.imshow(np.log10(msft_image), cmap='turbo', vmin=max_val - dynamic_range, vmax=max_val)
+    fig = px.imshow(np.log10(msft_image))
     return fig  
