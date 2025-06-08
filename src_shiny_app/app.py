@@ -21,12 +21,12 @@ app_ui = ui.page_sidebar(
     ),
 )
 
+N = 50  # Resolution (reduced for performance)
 
 def server(input, output, session):
     # Compute the spherical harmonics for selected l, m
     @reactive.calc
     def compute_harmonics():
-        N = 50  # Resolution (reduced for performance)
 
         # Generate grid
         t = np.linspace(np.pi, 0, N)  # theta: 180° to 0°
@@ -77,8 +77,8 @@ def server(input, output, session):
         theta_vals = harmonics['theta_values']
 
         # Generate sphere coordinates
-        phi = np.linspace(0, 2 * np.pi, 50)
-        theta = np.linspace(0, np.pi, 50)
+        phi = np.linspace(0, 2 * np.pi, N)
+        theta = np.linspace(0, np.pi, N)
         PHI, THETA = np.meshgrid(phi, theta)
 
         # Convert to Cartesian coordinates
@@ -133,8 +133,8 @@ def server(input, output, session):
         phi_vals = np.angle(harmonics['phi_values'])
 
         # Generate sphere coordinates
-        phi = np.linspace(0, 2 * np.pi, 50)
-        theta = np.linspace(0, np.pi, 50)
+        phi = np.linspace(0, 2 * np.pi, N)
+        theta = np.linspace(0, np.pi, N)
         PHI, THETA = np.meshgrid(phi, theta)
 
         # Convert to Cartesian coordinates
@@ -149,7 +149,7 @@ def server(input, output, session):
             go.Surface(
                 x=X, y=Y, z=Z,
                 surfacecolor=phi_vals,
-                colorscale='jet',
+                colorscale='twilight',
                 colorbar=dict(
                     title="Phase",
                     orientation="h",  # Make colorbar horizontal
