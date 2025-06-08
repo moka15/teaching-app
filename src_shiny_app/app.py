@@ -1,120 +1,189 @@
+from shiny import App, reactive, render, ui
 import numpy as np
-from shiny import reactive
-from shiny.express import input, render, ui
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
+import plotly.graph_objects as go
+from scipy.special import lpmv, factorial
 
-ui.page_opts(fillable=True, title="Scattering Pattern Simulator")
-
-with ui.layout_columns(col_widths=(4, 8)):
-    with ui.card(full_screen=True, height="100%"):
-        ui.card_header("Parameters")
-
-        ui.input_slider("radius", "Radius [nm]", min=1, max=100, value=20, step=1)
-        ui.input_slider("wavelength", "Wavelength [nm]", min=1, max=10, value=1, step=0.1)
-        ui.input_numeric("z_det", "Detector distance [m]", value=0.1, min=0.01, max=10, step=0.01)
-        ui.input_numeric("delta", "Refractive index (δ)", value=1e-5, min=1e-7, max=1e-3, step=1e-6)
-        ui.input_numeric("beta", "Absorption (β)", value=0, min=0, max=1e-4, step=1e-6)
-
-        with ui.accordion(id="advanced_options", open=False):
-            with ui.accordion_panel("Advanced Options"):
-                ui.input_numeric("msft_npix_real", "Real space grid size", value=32, min=16, max=128, step=8)
-                ui.input_numeric("msft_npix_fourier", "Fourier space grid size", value=128, min=64, max=512, step=64)
-
-    with ui.card(full_screen=True, height="100%"):
-        ui.card_header("Scattering Pattern")
+app_ui = ui.page_sidebar(
+    ui.sidebar(
+        ui.h3("Spherical Harmonics"),
+        ui.p("Use the sliders below to select specific (l, m) values for visualization."),
+        ui.input_slider("l_value", "l value", min=0, max=5, value=0),
+        # Set initial max to 0 but with a defined step to avoid math domain error
+        ui.input_slider("m_value", "m value", min=0, max=0, value=0, step=1),
+        ui.hr(),
+        ui.h4("Selected Mode"),
+        ui.output_text("selected_info"),
+    ),
+    ui.h2("Spherical Harmonics Visualization"),
+    ui.layout_columns(
+        ui.output_ui("theta_plot", height="500px"),
+        ui.output_ui("phi_plot", height="500px"),
+    ),
+)
 
 
-        @render.plot()
-        def scattering_plot():
-            # Get parameters from inputs
-            radius = input.radius()
-            wavelength = input.wavelength()
-            delta = input.delta()
-            beta = input.beta()
-            z_det = input.z_det()
-            msft_npix_real = int(input.msft_npix_real())
-            msft_npix_fourier = int(input.msft_npix_fourier())
+def server(input, output, session):
+    # Compute the spherical harmonics for selected l, m
+    @reactive.calc
+    def compute_harmonics():
+        N = 50  # Resolution (reduced for performance)
 
-            # Calculate derived parameters
-            box_delta = 2 * radius / (msft_npix_real - 1)
-            k_0 = 2 * np.pi / wavelength  # [1/nm]
+        # Generate grid
+        t = np.linspace(np.pi, 0, N)  # theta: 180° to 0°
+        p = np.linspace(-np.pi, np.pi, N)  # phi: -180° to 180°
 
-            # Create real space grid
-            msft_real_axis = np.linspace(-1, 1, msft_npix_real) * radius
-            X, Y, Z = np.meshgrid(msft_real_axis, msft_real_axis, msft_real_axis)
-            msft_density = (delta - 1j * beta) * (X ** 2 + Y ** 2 + Z ** 2 < radius ** 2)
+        T, P = np.meshgrid(t, p, indexing='ij')
 
-            # Create Fourier space grid
-            Q_perp_cut = np.fft.fftshift(np.fft.fftfreq(msft_npix_fourier, d=box_delta / (2 * np.pi)))
-            Q_X, Q_Y = np.meshgrid(Q_perp_cut, Q_perp_cut, indexing='ij')
-            Q_Z = k_0 - np.sqrt(k_0 ** 2 - Q_X ** 2 - Q_Y ** 2 + 0j)
+        l = input.l_value()
+        m = input.m_value()
 
-            # Polarization map
-            PolMap = 1 - (Q_Y / k_0) ** 2
-            PolMap[Q_X ** 2 + Q_Y ** 2 > k_0 ** 2] = np.nan
+        # Calculate Legendre polynomial
+        if l == 0:
+            Plm = np.ones_like(T)
+        else:
+            # Using scipy's lpmv function (note: it takes |m|)
+            Plm = lpmv(m, l, np.cos(T))
 
-            # Calculate scattered field
-            msft_image = np.fft.fftshift(np.fft.fft2(np.sum(msft_density, axis=0),
-                                                     s=(msft_npix_fourier, msft_npix_fourier))) * box_delta ** 2 * 1 / (
-                                     2 * np.pi)
+        # Calculate theta component
+        prefactor = (-1) ** ((m + abs(m)) / 2) * np.sqrt(
+            (2 * l + 1) * factorial(l - abs(m)) / (4 * np.pi * factorial(l + abs(m))))
+        theta_component = prefactor * Plm / ((-1) ** m)
 
-            # Cull evanescent waves
-            msft_image[Q_X ** 2 + Q_Y ** 2 > k_0 ** 2] = np.nan
-            msft_image *= k_0 / z_det
-            msft_image = PolMap * np.abs(msft_image ** 2)
+        # Calculate phi component
+        phi_component = np.exp(1j * m * P)
 
-            # Create plot
-            fig, ax = plt.subplots(figsize=(10, 8))
+        return {
+            't': t,
+            'p': p,
+            'theta_values': theta_component,
+            'phi_values': phi_component
+        }
 
-            # Use log scale for better visualization
-            norm = LogNorm(vmin=np.nanmin(msft_image[msft_image > 0]),
-                           vmax=np.nanmax(msft_image))
+    # Update the m_value slider range based on the selected l_value
+    @reactive.effect
+    @reactive.event(input.l_value)
+    def update_m_range():
+        l_val = input.l_value()
+        m_val = min(input.m_value(), l_val)
 
-            im = ax.imshow(msft_image.T, origin='lower', cmap='viridis',
-                           extent=[Q_perp_cut[0], Q_perp_cut[-1], Q_perp_cut[0], Q_perp_cut[-1]],
-                           norm=norm)
+        ui.update_slider("m_value", max=l_val, value=m_val)
 
-            # Add colorbar and labels
-            cbar = plt.colorbar(im, ax=ax)
-            cbar.set_label('Intensity (log scale)')
+    @render.ui
+    def theta_plot():
+        harmonics = compute_harmonics()
+        l, m = input.l_value(), input.m_value()
 
-            ax.set_xlabel('Q_x [1/nm]')
-            ax.set_ylabel('Q_y [1/nm]')
-            ax.set_title(f'Scattering Pattern for {radius}nm Sphere, λ={wavelength}nm')
+        # Create sphere with amplitude values
+        theta_vals = harmonics['theta_values']
 
-            # Draw a circle at k_0 to show the boundary of propagating waves
-            circle = plt.Circle((0, 0), k_0, fill=False, color='red', linestyle='--')
-            ax.add_artist(circle)
+        # Generate sphere coordinates
+        phi = np.linspace(0, 2 * np.pi, 50)
+        theta = np.linspace(0, np.pi, 50)
+        PHI, THETA = np.meshgrid(phi, theta)
 
-            # Draw circles with labels for corresponding scattering angles
-            for angle in [15, 30, 60]:
-                radius_angle = k_0 * np.sin(np.radians(angle))
-                circle_angle = plt.Circle((0, 0), radius_angle, fill=False, color='blue', linestyle='--')
-                ax.add_artist(circle_angle)
+        # Convert to Cartesian coordinates
+        X = np.sin(THETA) * np.cos(PHI)
+        Y = np.sin(THETA) * np.sin(PHI)
+        Z = np.cos(THETA)
 
-                # Only draw text if its radius is within the plot limits
-                if radius_angle < np.max(Q_perp_cut):
-                    ax.text(radius_angle + 0.02, 0.02, f'{angle}°', color='blue')
+        # Create surface plot
+        fig = go.Figure()
 
-            ax.set_aspect('equal')
-            if np.max(Q_perp_cut) > k_0:
-                ax.set_xlim(-k_0, k_0)
-                ax.set_ylim(-k_0, k_0)
-            plt.tight_layout()
-            return fig
+        fig.add_trace(
+            go.Surface(
+                x=X, y=Y, z=Z,
+                surfacecolor=theta_vals,
+                colorscale='RdBu',
+                colorbar=dict(
+                    title="Amplitude",
+                    orientation="h",  # Make colorbar horizontal
+                    y=1.0,  # Place colorbar at the top
+                    yanchor="bottom",  # Anchor at bottom of colorbar
+                    x=0.5,  # Center colorbar horizontally
+                    xanchor="center",  # Anchor at center of colorbar
+                    len=0.6,  # Make colorbar 60% of the plot width
+                    thickness=20  # Make colorbar slightly thicker
+                ),
+                cmin=-np.max(np.abs(theta_vals)),
+                cmax=np.max(np.abs(theta_vals))
+            )
+        )
 
-with ui.card():
-    ui.card_header("About This App")
-    ui.markdown("""
-    This app simulates the far-field scattering pattern from a spherical object.
+        fig.update_layout(
+            title=f"Amplitude Θ<sub>{l}</sub><sup>{m}</sup>(θ)",
+            scene=dict(
+                aspectmode='cube',
+                xaxis_title="x",
+                yaxis_title="y",
+                zaxis_title="z"
+            ),
+            margin=dict(l=0, r=0, t=80, b=0),  # Increased top margin for colorbar
+            paper_bgcolor="white",
+            height=500
+        )
 
-    **Parameters:**
-    - **Radius**: Size of the spherical object in nanometers
-    - **Wavelength**: Incident light wavelength in nanometers
-    - **Detector distance**: Distance from the object to the detector in meters
-    - **Refractive index (δ)**: Real part of the refractive index contrast (n = 1 - δ + iβ)
-    - **Absorption (β)**: Imaginary part of the refractive index (absorption)
+        return ui.HTML(fig.to_html(include_plotlyjs="cdn", full_html=False))
 
-    The red dashed circle indicates the boundary between propagating and evanescent waves.
-    """)
+    @render.ui
+    def phi_plot():
+        harmonics = compute_harmonics()
+        l, m = input.l_value(), input.m_value()
+
+        # Create sphere with phase values
+        phi_vals = np.angle(harmonics['phi_values'])
+
+        # Generate sphere coordinates
+        phi = np.linspace(0, 2 * np.pi, 50)
+        theta = np.linspace(0, np.pi, 50)
+        PHI, THETA = np.meshgrid(phi, theta)
+
+        # Convert to Cartesian coordinates
+        X = np.sin(THETA) * np.cos(PHI)
+        Y = np.sin(THETA) * np.sin(PHI)
+        Z = np.cos(THETA)
+
+        # Create surface plot
+        fig = go.Figure()
+
+        fig.add_trace(
+            go.Surface(
+                x=X, y=Y, z=Z,
+                surfacecolor=phi_vals,
+                colorscale='jet',
+                colorbar=dict(
+                    title="Phase",
+                    orientation="h",  # Make colorbar horizontal
+                    y=1.0,  # Place colorbar at the top
+                    yanchor="bottom",  # Anchor at bottom of colorbar
+                    x=0.5,  # Center colorbar horizontally
+                    xanchor="center",  # Anchor at center of colorbar
+                    len=0.6,  # Make colorbar 60% of the plot width
+                    thickness=20  # Make colorbar slightly thicker
+                ),
+                cmin=-np.pi,
+                cmax=np.pi
+            )
+        )
+
+        fig.update_layout(
+            title=f"Phase Φ<sub>{m}</sub>(φ)",
+            scene=dict(
+                aspectmode='cube',
+                xaxis_title="x",
+                yaxis_title="y",
+                zaxis_title="z"
+            ),
+            margin=dict(l=0, r=0, t=80, b=0),  # Increased top margin for colorbar
+            paper_bgcolor="white",
+            height=500
+        )
+
+        return ui.HTML(fig.to_html(include_plotlyjs="cdn", full_html=False))
+
+    @render.text
+    def selected_info():
+        l, m = input.l_value(), input.m_value()
+        return f"Selected: l = {l}, m = {m}"
+
+
+app = App(app_ui, server)
