@@ -21,10 +21,11 @@ app_ui = ui.page_sidebar(
     ),
 )
 
-N = 50  # Resolution (reduced for performance)
+N = 128  # Resolution (reduced for performance)
 
 def server(input, output, session):
     # Compute the spherical harmonics for selected l, m
+
     @reactive.calc
     def compute_harmonics():
 
